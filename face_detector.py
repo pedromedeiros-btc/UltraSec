@@ -1,3 +1,7 @@
+import os
+os.environ["QT_QPA_PLATFORM"] = "xcb"
+os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = "/home/cloudwalkoffice/face_detection/face_detection_env/lib/python3.11/site-packages/cv2/qt/plugins"
+
 import face_recognition
 import cv2
 import numpy as np
@@ -11,10 +15,15 @@ class FaceDetector:
         self.known_names = []
         self.saved_faces_dir = "saved_faces"
         self.encodings_file = "known_faces.pkl"
+        self.registration_dir = "new_registrations"
         
         # Create directory for saved faces if it doesn't exist
         if not os.path.exists(self.saved_faces_dir):
             os.makedirs(self.saved_faces_dir)
+            
+        # Create directory for new registrations if it doesn't exist
+        if not os.path.exists(self.registration_dir):
+            os.makedirs(self.registration_dir)
             
         # Load known faces if file exists
         self.load_known_faces()
@@ -86,8 +95,20 @@ class FaceDetector:
             print(f"Error saving face: {str(e)}")
             return False
 
+    def log_detection(self, name, timestamp):
+        log_file = "detections.txt"
+        print(f"{name} detected at {timestamp}")  # Console output
+        with open(log_file, "a", buffering=1) as f:  # Line buffering
+            f.write(f"{name} was detected at the office at {timestamp}\n")
+            f.flush()  # Force write to disk
+
     def run_detection(self):
-        cap = cv2.VideoCapture(0)
+        cap = cv2.VideoCapture(1)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)  # Reduce from 640 to 320
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)  # Reduce from 480 to 240
+        process_every_n_frames = 4  # Process every 4th frame instead of 3rd
+        frame_count = 0
+        
         process_this_frame = True
         
         # Create debug window
@@ -103,7 +124,11 @@ class FaceDetector:
             ret, frame = cap.read()
             if not ret:
                 break
-
+            
+            frame_count += 1
+            if frame_count % process_every_n_frames != 0:
+                continue
+            
             if process_this_frame:
                 # Convert to RGB
                 rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -127,6 +152,9 @@ class FaceDetector:
                                 best_match_index = np.argmin(distances)
                                 if distances[best_match_index] < 0.6:
                                     name = self.known_names[best_match_index]
+                                    # Log only when we have a valid name
+                                    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                    self.log_detection(name, timestamp)
                                 
                                 # Show distances in debug window
                                 for i, (dist, known_name) in enumerate(zip(distances, self.known_names)):
@@ -192,8 +220,49 @@ class FaceDetector:
                     if (x1 < face_center_x < x2 and y1 < face_center_y < y2):
                         self.save_face(frame, face_location)
 
+            # Check for new registrations
+            for file in os.listdir(self.registration_dir):
+                if file.endswith('.jpg') or file.endswith('.png'):
+                    name, _ = os.path.splitext(file)
+                    image_path = os.path.join(self.registration_dir, file)
+                    if self.register_face_from_file(image_path, name):
+                        os.remove(image_path)  # Remove after successful registration
+
         cap.release()
         cv2.destroyAllWindows()
+
+    def save_remote_face(self, image_path, name):
+        frame = cv2.imread(image_path)
+        if frame is None:
+            return False
+        
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        face_locations = face_recognition.face_locations(rgb_frame)
+        
+        if len(face_locations) == 1:
+            return self.save_face(frame, face_locations[0], name)
+        return False
+
+    def register_face_from_file(self, image_path, name):
+        try:
+            # Load and process the image
+            frame = cv2.imread(image_path)
+            if frame is None:
+                print(f"Could not load image: {image_path}")
+                return False
+            
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            face_locations = face_recognition.face_locations(rgb_frame)
+            
+            if len(face_locations) == 1:
+                return self.save_face(frame, face_locations[0], name)
+            else:
+                print(f"Found {len(face_locations)} faces, need exactly 1 face")
+                return False
+            
+        except Exception as e:
+            print(f"Error registering face: {str(e)}")
+            return False
 
 if __name__ == "__main__":
     detector = FaceDetector()

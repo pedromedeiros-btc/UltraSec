@@ -92,6 +92,3 @@ ENCODINGS_FILE = "known_faces.pkl"
 * Explicit consent for enrolled faces
 * Performance optimization for accuracy
 
-## License
-
-[Add your license information here]

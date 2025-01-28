@@ -1,4 +1,4 @@
-# PiSurveillance AI
+# CWUltrasec
 
 A Raspberry Pi-based real-time face recognition system with adaptive learning capabilities.
 

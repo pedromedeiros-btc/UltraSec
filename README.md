@@ -32,8 +32,8 @@ A Raspberry Pi-based real-time face recognition system with adaptive learning ca
 
 1. Clone Repository:
 ```bash
-git clone https://github.com/yourusername/pisurveillance-ai.git
-cd pisurveillance-ai
+git clone https://github.com/pedromedeiros-btc/UltraSec
+cd UltraSec
 ```
 
 2. Install Dependencies:
@@ -51,7 +51,7 @@ sudo raspi-config  # Navigate to: Interfacing Options > Camera > Enable Usage
 
 Run the main application:
 ```bash
-python surveillance_main.py
+python face_detector.py
 ```
 
 ### Interface Controls

@@ -22,6 +22,7 @@ class FaceDetector:
         self.processed_unknowns = set()  # Keep track of recently processed unknown faces
         self.cap = None
         self.log_callback = None
+        self.last_detection_times = {}  # Track last detection time for each person
         
         # Create necessary directories
         for directory in [self.saved_faces_dir, self.registration_dir, self.logs_dir]:
@@ -233,6 +234,16 @@ class FaceDetector:
             print(f"Error deleting face: {str(e)}")
             return False
 
+    def should_log_detection(self, name):
+        """Check if enough time has passed to log this detection"""
+        current_time = datetime.now()
+        if name in self.last_detection_times:
+            time_diff = (current_time - self.last_detection_times[name]).total_seconds()
+            if time_diff < 5:  # 5 second cooldown
+                return False
+        self.last_detection_times[name] = current_time
+        return True
+
     def get_frame_with_detections(self):
         """Get a frame from the camera with face detections drawn on it"""
         if self.cap is None:
@@ -240,8 +251,10 @@ class FaceDetector:
             if not self.cap.isOpened():
                 return False, None
             
+            # Lower resolution for better performance
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+            self.cap.set(cv2.CAP_PROP_FPS, 30)  # Keep 30fps for smooth video
 
         success, frame = self.cap.read()
         if not success:
@@ -297,8 +310,8 @@ class FaceDetector:
                             daemon=True
                         ).start()
                 
-                # Log detections for known faces
-                elif is_inside and name != "Unknown":
+                # Log detections for known faces with cooldown
+                elif is_inside and name != "Unknown" and self.should_log_detection(name):
                     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     if hasattr(self, 'log_callback'):
                         self.log_callback(name, timestamp)

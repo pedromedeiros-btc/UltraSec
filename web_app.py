@@ -87,7 +87,11 @@ def log_callback(name, timestamp):
         print(f"Error writing to log file: {str(e)}")
     
     # Emit to all connected clients
-    socketio.emit('new_log', {'message': log_message}, broadcast=True)
+    try:
+        socketio.emit('new_log', {'message': log_message}, broadcast=True)
+        print(f"Emitted log: {log_message}")  # Debug print
+    except Exception as e:
+        print(f"Error emitting log: {str(e)}")
 
 # Set the log callback
 detector.log_callback = log_callback
@@ -263,7 +267,13 @@ def get_face_image(face_id):
 @socketio.on('connect')
 def handle_connect():
     print('Client connected')
-    # Automatically start camera when client connects
+    # Send current logs to the newly connected client
+    try:
+        logs = read_latest_logs()
+        socketio.emit('initial_logs', {'logs': logs}, room=request.sid)
+    except Exception as e:
+        print(f"Error sending initial logs: {str(e)}")
+    # Start camera
     handle_start_camera()
 
 @socketio.on('disconnect')

@@ -40,61 +40,49 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 8px;
+            padding: 10px;
             border-bottom: 1px solid #dee2e6;
-        }
-        .known-face-item:last-child {
-            border-bottom: none;
-        }
-        .known-face-name {
-            flex: 1;
-            margin-right: 10px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-        .known-face-buttons {
-            display: flex;
-            gap: 5px;
         }
     </style>
 </head>
 <body>
-    <div class="container mt-4">
+    <div class="container-fluid mt-4">
         <div class="row">
-            <!-- Left column: Camera feed -->
+            <!-- Camera Feed Column -->
             <div class="col-md-8">
                 <div class="card">
                     <div class="card-header">
                         <h5 class="mb-0">Live Camera Feed</h5>
                     </div>
                     <div class="card-body">
-                        <img id="cameraFeed" src="" class="img-fluid">
+                        <img id="cameraFeed" src="" alt="Camera Feed">
                     </div>
                 </div>
             </div>
-            
-            <!-- Right column: Known faces and logs -->
+
+            <!-- Controls Column -->
             <div class="col-md-4">
-                <div class="card">
+                <!-- Known Faces Section -->
+                <div class="card mb-4">
                     <div class="card-header">
                         <h5 class="mb-0">Known Faces</h5>
                     </div>
-                    <div class="card-body">
-                        <div id="knownFaces">
-                            <!-- Known faces will be added here -->
-                        </div>
-                        <button class="btn btn-primary mt-3" onclick="showAddFaceModal()">Add New Face</button>
+                    <div class="card-body" id="knownFaces">
+                        <!-- Known faces will be populated here -->
+                    </div>
+                    <div class="card-footer">
+                        <button class="btn btn-primary" onclick="showAddFaceModal()">Add New Face</button>
                     </div>
                 </div>
-                
-                <div class="card mt-3">
+
+                <!-- Live Detection Log -->
+                <div class="card">
                     <div class="card-header">
                         <h5 class="mb-0">Live Detection Log</h5>
                     </div>
                     <div class="card-body">
                         <div id="logContainer">
-                            <!-- Log entries will be added here -->
+                            <!-- Logs will be populated here -->
                         </div>
                     </div>
                 </div>
@@ -113,12 +101,12 @@
                 <div class="modal-body">
                     <form id="addFaceForm">
                         <div class="mb-3">
-                            <label class="form-label">Name</label>
-                            <input type="text" class="form-control" name="name" required>
+                            <label for="faceName" class="form-label">Name</label>
+                            <input type="text" class="form-control" id="faceName" required>
                         </div>
                         <div class="mb-3">
-                            <label class="form-label">Image</label>
-                            <input type="file" class="form-control" name="image" accept="image/*" required>
+                            <label for="faceImage" class="form-label">Image</label>
+                            <input type="file" class="form-control" id="faceImage" accept="image/*" required>
                         </div>
                     </form>
                 </div>
@@ -135,11 +123,11 @@
         <div class="modal-dialog">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h5 class="modal-title">Face Preview</h5>
+                    <h5 class="modal-title">View Face</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body text-center">
-                    <img id="facePreview" class="face-preview" src="" alt="Face Preview">
+                    <img id="viewFaceImage" class="face-preview mb-3" src="" alt="Face Preview">
                 </div>
             </div>
         </div>
@@ -148,8 +136,10 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <script>
-        const socket = io();
-        let addFaceModal, viewFaceModal;
+        let socket = io();
+        let addFaceModal = new bootstrap.Modal(document.getElementById('addFaceModal'));
+        let viewFaceModal = new bootstrap.Modal(document.getElementById('viewFaceModal'));
+        let logContainer = document.getElementById('logContainer');
 
         // Connect to WebSocket
         socket.on('connect', () => {
@@ -159,32 +149,29 @@
 
         // Handle camera feed updates
         socket.on('frame_update', (data) => {
-            document.getElementById('cameraFeed').src = `data:image/jpeg;base64,${data.frame}`;
+            document.getElementById('cameraFeed').src = 'data:image/jpeg;base64,' + data.frame;
         });
 
-        // Handle new log entries
+        // Handle new log messages
         socket.on('new_log', (data) => {
-            const logContainer = document.getElementById('logContainer');
-            const logEntry = document.createElement('div');
-            logEntry.className = 'log-entry';
-            logEntry.textContent = data.message;
-            
-            // Remove old entries if we have more than 50
-            while (logContainer.children.length >= 50) {
-                logContainer.removeChild(logContainer.firstChild);
-            }
-            
-            logContainer.appendChild(logEntry);
-            logContainer.scrollTop = logContainer.scrollHeight;
-            
-            // Highlight the new entry briefly
-            logEntry.style.backgroundColor = '#e9ecef';
-            setTimeout(() => {
-                logEntry.style.backgroundColor = '';
-            }, 2000);
+            addLogEntry(data.message);
         });
 
-        // Load known faces
+        // Handle initial logs
+        socket.on('initial_logs', (data) => {
+            logContainer.innerHTML = '';  // Clear existing logs
+            data.logs.forEach(log => addLogEntry(log));
+        });
+
+        function addLogEntry(message) {
+            const div = document.createElement('div');
+            div.className = 'log-entry';
+            div.textContent = message;
+            logContainer.appendChild(div);
+            logContainer.scrollTop = logContainer.scrollHeight;  // Auto-scroll to bottom
+        }
+
+        // Load known faces on page load
         function loadKnownFaces() {
             fetch('/api/faces')
                 .then(response => response.json())
@@ -192,69 +179,49 @@
                     const container = document.getElementById('knownFaces');
                     container.innerHTML = '';
                     data.faces.forEach(face => {
-                        container.innerHTML += `
-                            <div class="known-face-item">
-                                <div class="known-face-name">${face.name}</div>
-                                <div class="known-face-buttons">
-                                    <button class="btn btn-sm btn-info" onclick="viewFace(${face.id})">View</button>
-                                    <button class="btn btn-sm btn-primary" onclick="editFace(${face.id})">Edit</button>
-                                    <button class="btn btn-sm btn-danger" onclick="deleteFace(${face.id})">Delete</button>
-                                </div>
+                        const div = document.createElement('div');
+                        div.className = 'known-face-item';
+                        div.innerHTML = `
+                            <span>${face.name}</span>
+                            <div>
+                                <button class="btn btn-info btn-sm" onclick="viewFace(${face.id})">View</button>
+                                <button class="btn btn-primary btn-sm" onclick="editFace(${face.id})">Edit</button>
+                                <button class="btn btn-danger btn-sm" onclick="deleteFace(${face.id})">Delete</button>
                             </div>
                         `;
+                        container.appendChild(div);
                     });
                 });
         }
 
-        // Initialize
-        document.addEventListener('DOMContentLoaded', () => {
-            addFaceModal = new bootstrap.Modal(document.getElementById('addFaceModal'));
-            viewFaceModal = new bootstrap.Modal(document.getElementById('viewFaceModal'));
-            loadKnownFaces();
-            
-            // Load initial logs
-            const logContainer = document.getElementById('logContainer');
-            const initialLogs = {{ initial_logs|tojson|safe }};
-            initialLogs.forEach(log => {
-                const logEntry = document.createElement('div');
-                logEntry.className = 'log-entry';
-                logEntry.textContent = log;
-                logContainer.appendChild(logEntry);
-            });
-            logContainer.scrollTop = logContainer.scrollHeight;
-        });
-
-        function viewFace(id) {
-            fetch(`/api/faces/${id}/image`)
-                .then(response => response.json())
-                .then(data => {
-                    if (data.image) {
-                        document.getElementById('facePreview').src = `data:image/jpeg;base64,${data.image}`;
-                        viewFaceModal.show();
-                    }
-                });
-        }
-
         function showAddFaceModal() {
+            document.getElementById('addFaceForm').reset();
             addFaceModal.show();
         }
 
         function addFace() {
-            const form = document.getElementById('addFaceForm');
-            const formData = new FormData(form);
-            
+            const formData = new FormData();
+            formData.append('name', document.getElementById('faceName').value);
+            formData.append('image', document.getElementById('faceImage').files[0]);
+
             fetch('/api/faces', {
                 method: 'POST',
                 body: formData
             })
             .then(response => response.json())
             .then(data => {
-                if (data.message) {
-                    addFaceModal.hide();
-                    form.reset();
-                    loadKnownFaces();
-                }
+                addFaceModal.hide();
+                loadKnownFaces();
             });
+        }
+
+        function viewFace(id) {
+            fetch(`/api/faces/${id}/image`)
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('viewFaceImage').src = 'data:image/jpeg;base64,' + data.image;
+                    viewFaceModal.show();
+                });
         }
 
         function editFace(id) {
@@ -269,9 +236,7 @@
                 })
                 .then(response => response.json())
                 .then(data => {
-                    if (data.message) {
-                        loadKnownFaces();
-                    }
+                    loadKnownFaces();
                 });
             }
         }
@@ -283,17 +248,13 @@
                 })
                 .then(response => response.json())
                 .then(data => {
-                    if (data.message) {
-                        loadKnownFaces();
-                    }
+                    loadKnownFaces();
                 });
             }
         }
 
-        // Handle faces_updated event
-        socket.on('faces_updated', () => {
-            loadKnownFaces();
-        });
+        // Initial load
+        loadKnownFaces();
     </script>
 </body>
 </html>

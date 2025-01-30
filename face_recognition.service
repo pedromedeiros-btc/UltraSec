@@ -1,0 +1,14 @@
+[Unit]
+Description=Face Recognition System
+After=network.target
+
+[Service]
+User=cloudwalkoffice
+WorkingDirectory=/home/cloudwalkoffice/face_detection
+Environment="PATH=/home/cloudwalkoffice/face_detection/face_detection_env/bin:$PATH"
+ExecStart=/home/cloudwalkoffice/face_detection/face_detection_env/bin/python3 web_app.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target 

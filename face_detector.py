@@ -9,6 +9,9 @@ import os
 from datetime import datetime
 import pickle
 import threading
+import subprocess
+from PIL import Image
+import io
 
 class FaceDetector:
     def __init__(self):
@@ -20,7 +23,8 @@ class FaceDetector:
         self.logs_dir = "detection_logs"  # New directory for daily logs
         self.face_trackers = {}  # Track faces between frames
         self.processed_unknowns = set()  # Keep track of recently processed unknown faces
-        self.cap = None
+        self.last_processed_clear = datetime.now()  # Add this line
+        self.cap = None  # Changed from camera_process to cap
         self.log_callback = None
         self.last_detection_times = {}  # Track last detection time for each person
         
@@ -151,51 +155,83 @@ class FaceDetector:
 
     def save_face(self, frame, face_location, name=None, auto_capture=False):
         try:
-            # Extract face from frame
-            top, right, bottom, left = face_location
-            face_image = frame[top:bottom, left:right]
+            print(f"Attempting to save face. Name: {name}, Auto capture: {auto_capture}")
             
-            # Get face encoding first to check for existing face
+            # Extract face from frame with larger padding (40% on each side)
+            top, right, bottom, left = face_location
+            height, width = frame.shape[:2]
+            
+            # Calculate padding (40% of face size)
+            pad_x = int((right - left) * 0.4)
+            pad_y = int((bottom - top) * 0.4)
+            
+            # Ensure padded coordinates are within frame bounds
+            left_pad = max(0, left - pad_x)
+            right_pad = min(width, right + pad_x)
+            top_pad = max(0, top - pad_y)
+            bottom_pad = min(height, bottom + pad_y)
+            
+            # Extract padded face region from clean frame
+            face_image = frame[top_pad:bottom_pad, left_pad:right_pad].copy()
+            
+            # Get face encoding
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             face_encoding = self.get_face_encoding(rgb_frame, face_location)
             
             if face_encoding is not None:
                 face_encoding = np.array(face_encoding)
+                print("Got face encoding successfully")
                 
                 # Check if this face is already known
                 if self.known_faces:
                     distances = face_recognition.face_distance(self.known_faces, face_encoding)
                     min_distance_idx = np.argmin(distances)
                     min_distance = distances[min_distance_idx]
+                    print(f"Minimum distance to known faces: {min_distance:.3f}")
                     
-                    if min_distance < 0.4:  # Face already exists
+                    if min_distance < 0.6:
                         existing_name = self.known_names[min_distance_idx]
+                        print(f"Face matches existing person: {existing_name}")
                         if not auto_capture and name is not None and existing_name != name:
-                            # Update name if it's a manual save with a different name
                             return self.update_face_name(existing_name, name)
-                        print(f"This face is already registered as {existing_name}")
                         return False
                 
-                # If we get here, it's a new face or a manual save with a new name
-                if name is None and not auto_capture:
-                    name = input("Enter name for this face: ")
-                elif name is None and auto_capture:
-                    name = self.generate_hashcode()
+                # Generate name for unknown face
+                if name is None:
+                    if auto_capture:
+                        name = self.generate_hashcode()
+                        print(f"Generated new name for unknown face: {name}")
+                    else:
+                        name = input("Enter name for this face: ")
                 
                 # Generate unique filename
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 filename = f"{name}_{timestamp}.jpg"
                 filepath = os.path.join(self.saved_faces_dir, filename)
                 
-                # Save the face image
+                # Resize the face image to be larger (800px height while maintaining aspect ratio)
+                aspect_ratio = face_image.shape[1] / face_image.shape[0]
+                target_height = 800
+                target_width = int(target_height * aspect_ratio)
+                face_image = cv2.resize(face_image, (target_width, target_height), interpolation=cv2.INTER_LANCZOS4)
+                
+                # Save the clean, resized face image
                 cv2.imwrite(filepath, face_image)
+                print(f"Saved face image to: {filepath}")
                 
                 self.known_faces.append(face_encoding)
                 self.known_names.append(name)
                 self.save_known_faces()
-                print(f"Face saved as {filename}")
-                print(f"Known faces: {self.known_names}")
+                print(f"Added new face to known faces: {name}")
+
+                # Notify web app about new face
+                if hasattr(self, 'socketio'):
+                    print("Notifying web app of new face")
+                    self.socketio.emit('faces_updated')
+                
                 return True
+                
+            print("Failed to get face encoding")
             return False
             
         except Exception as e:
@@ -244,90 +280,112 @@ class FaceDetector:
         self.last_detection_times[name] = current_time
         return True
 
-    def get_frame_with_detections(self):
-        """Get a frame from the camera with face detections drawn on it"""
-        if self.cap is None:
+    def start_camera(self):
+        """Initialize camera capture"""
+        try:
+            if self.cap is not None:
+                self.cleanup()
+            
             self.cap = cv2.VideoCapture(0)
             if not self.cap.isOpened():
-                return False, None
+                print("Failed to open camera")
+                return False
+                
+            # Set camera properties for better performance
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            self.cap.set(cv2.CAP_PROP_FPS, 15)
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             
-            # Lower resolution for better performance
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
-            self.cap.set(cv2.CAP_PROP_FPS, 30)  # Keep 30fps for smooth video
+            print("Started camera capture with optimized settings")
+            return True
+        except Exception as e:
+            print(f"Error starting camera: {str(e)}")
+            return False
 
-        success, frame = self.cap.read()
-        if not success:
+    def get_frame_with_detections(self):
+        """Get a frame from camera with face detections"""
+        if self.cap is None or not self.cap.isOpened():
+            if not self.start_camera():
+                return False, None
+
+        try:
+            ret, original_frame = self.cap.read()
+            if not ret or original_frame is None:
+                print("Failed to read frame")
+                return False, None
+
+            # Make a copy for drawing
+            display_frame = original_frame.copy()
+            height, width = display_frame.shape[:2]
+
+            # Draw detection box
+            square_size = min(width, height) * 2 // 3
+            x1 = (width - square_size) // 2
+            y1 = (height - square_size) // 2
+            x2 = x1 + square_size
+            y2 = y1 + square_size
+            
+            cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+            # Process faces
+            rgb_frame = cv2.cvtColor(original_frame, cv2.COLOR_BGR2RGB)
+            face_locations = face_recognition.face_locations(rgb_frame, model="hog", number_of_times_to_upsample=1)
+            
+            if face_locations:
+                face_encodings = face_recognition.face_encodings(rgb_frame, face_locations, num_jitters=1, model="small")
+                
+                for face_location, face_encoding in zip(face_locations, face_encodings):
+                    top, right, bottom, left = face_location
+                    face_center_x = (left + right) // 2
+                    face_center_y = (top + bottom) // 2
+                    
+                    name = "Unknown"
+                    if self.known_faces:
+                        distances = face_recognition.face_distance(np.array(self.known_faces), face_encoding)
+                        if len(distances) > 0:
+                            best_match_index = np.argmin(distances)
+                            min_distance = distances[best_match_index]
+                            if min_distance < 0.6:
+                                name = self.known_names[best_match_index]
+                    
+                    is_inside = (x1 < face_center_x < x2 and y1 < face_center_y < y2)
+                    color = (0, 0, 255) if is_inside else (255, 0, 0)
+                    
+                    # Draw rectangles and text on display frame only
+                    cv2.rectangle(display_frame, (left, top), (right, bottom), color, 2)
+                    cv2.rectangle(display_frame, (left, bottom - 35), (right, bottom), color, cv2.FILLED)
+                    cv2.putText(display_frame, name, (left + 6, bottom - 6),
+                              cv2.FONT_HERSHEY_DUPLEX, 0.6, (255, 255, 255), 1)
+                    
+                    # Handle unknown faces in green box using original frame
+                    if is_inside and name == "Unknown":
+                        print("Found unknown face in green box")
+                        self.save_face(original_frame, face_location, None, True)
+                        if hasattr(self, 'socketio'):
+                            self.socketio.emit('faces_updated')
+                            print("Notified web app of new face")
+                    
+                    # Log detections for known faces
+                    elif is_inside and name != "Unknown" and self.should_log_detection(name):
+                        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        if hasattr(self, 'log_callback'):
+                            self.log_callback(name, timestamp)
+                        else:
+                            self.log_detection(name, timestamp)
+            
+            return True, display_frame
+
+        except Exception as e:
+            print(f"Error capturing frame: {str(e)}")
             return False, None
 
-        height, width = frame.shape[:2]
-        square_size = min(width, height) // 2
-        x1 = (width - square_size) // 2
-        y1 = (height - square_size) // 2
-        x2 = x1 + square_size
-        y2 = y1 + square_size
-        
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-
-        # Convert to RGB
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        
-        try:
-            # Detect faces using HOG model for better performance
-            face_locations = face_recognition.face_locations(rgb_frame, model="hog")
-            face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
-            
-            for face_location, face_encoding in zip(face_locations, face_encodings):
-                top, right, bottom, left = face_location
-                face_center_x = (left + right) // 2
-                face_center_y = (top + bottom) // 2
-                
-                name = "Unknown"
-                if self.known_faces:
-                    distances = face_recognition.face_distance(self.known_faces, face_encoding)
-                    if len(distances) > 0:
-                        best_match_index = np.argmin(distances)
-                        if distances[best_match_index] < 0.6:
-                            name = self.known_names[best_match_index]
-                
-                is_inside = (x1 < face_center_x < x2 and y1 < face_center_y < y2)
-                color = (0, 0, 255) if is_inside else (255, 0, 0)
-                
-                cv2.rectangle(frame, (left, top), (right, bottom), color, 2)
-                cv2.rectangle(frame, (left, bottom - 35), (right, bottom), color, cv2.FILLED)
-                cv2.putText(frame, name, (left + 6, bottom - 6),
-                          cv2.FONT_HERSHEY_DUPLEX, 0.6, (255, 255, 255), 1)
-                
-                # Handle unknown faces in green box
-                if is_inside and name == "Unknown":
-                    face_key = f"{top}_{right}_{bottom}_{left}"
-                    if face_key not in self.processed_unknowns:
-                        self.processed_unknowns.add(face_key)
-                        face_frame = frame[top:bottom, left:right].copy()
-                        threading.Thread(
-                            target=self.save_face,
-                            args=(frame, face_location, None, True),
-                            daemon=True
-                        ).start()
-                
-                # Log detections for known faces with cooldown
-                elif is_inside and name != "Unknown" and self.should_log_detection(name):
-                    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    if hasattr(self, 'log_callback'):
-                        self.log_callback(name, timestamp)
-                    else:
-                        self.log_detection(name, timestamp)
-                        
-        except Exception as e:
-            print(f"Error in detection: {str(e)}")
-
-        return True, frame
-
     def cleanup(self):
+        """Clean up camera resources"""
         if self.cap is not None:
             self.cap.release()
             self.cap = None
-        print("Camera resources released")
+            print("Camera resources released")
 
 if __name__ == "__main__":
     detector = FaceDetector()

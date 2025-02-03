@@ -1,10 +1,10 @@
-from flask import Flask, render_template, Response, jsonify, request
+from flask import Flask, render_template, Response, jsonify, request, stream_with_context
 from flask_socketio import SocketIO, emit
 import cv2
 import threading
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from face_detector import FaceDetector
 import base64
 import numpy as np
@@ -12,6 +12,8 @@ import subprocess
 import signal
 import sys
 import time
+import queue
+import face_recognition
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your-secret-key'
@@ -19,10 +21,14 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 
 # Global variables
 detector = FaceDetector()
+detector.socketio = socketio  # Add this line to pass socketio to detector
 camera_thread = None
 camera_running = False
 frame_buffer = None
 ngrok_process = None
+
+# Create a queue for logs
+log_queue = queue.Queue()
 
 def start_ngrok():
     """Start ngrok in the background"""
@@ -86,12 +92,16 @@ def log_callback(name, timestamp):
     except Exception as e:
         print(f"Error writing to log file: {str(e)}")
     
-    # Emit to all connected clients
+    # Add to queue for SSE
     try:
-        socketio.emit('new_log', {'message': log_message}, broadcast=True)
-        print(f"Emitted log: {log_message}")  # Debug print
+        log_data = {
+            'message': log_message,
+            'timestamp': timestamp,
+            'name': name
+        }
+        log_queue.put(log_data)
     except Exception as e:
-        print(f"Error emitting log: {str(e)}")
+        print(f"Error queueing log: {str(e)}")
 
 # Set the log callback
 detector.log_callback = log_callback
@@ -271,6 +281,7 @@ def handle_connect():
     try:
         logs = read_latest_logs()
         socketio.emit('initial_logs', {'logs': logs}, room=request.sid)
+        print(f"Sent {len(logs)} initial logs to client")
     except Exception as e:
         print(f"Error sending initial logs: {str(e)}")
     # Start camera
@@ -307,6 +318,77 @@ def handle_stop_camera():
 def emit_log(message):
     """Emit a log message to all connected clients"""
     socketio.emit('new_log', {'message': message})
+
+@app.route('/stream-logs')
+def stream_logs():
+    def generate():
+        while True:
+            try:
+                # Get log from queue with timeout
+                log_data = log_queue.get(timeout=20)
+                yield f"data: {json.dumps(log_data)}\n\n"
+            except queue.Empty:
+                # Send keep-alive comment every 20 seconds
+                yield ": keep-alive\n\n"
+            except Exception as e:
+                print(f"Error in log stream: {str(e)}")
+                continue
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive'
+        }
+    )
+
+@app.route('/api/faces/upload', methods=['POST'])
+def upload_face():
+    """Upload a new face image with name"""
+    try:
+        if 'image' not in request.files:
+            return jsonify({'error': 'No image file provided'}), 400
+        
+        image_file = request.files['image']
+        name = request.form.get('name')
+        
+        if not name:
+            return jsonify({'error': 'No name provided'}), 400
+        
+        # Read and convert image
+        image_data = image_file.read()
+        nparr = np.frombuffer(image_data, np.uint8)
+        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        if frame is None:
+            return jsonify({'error': 'Invalid image file'}), 400
+        
+        # Convert to RGB for face detection
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        
+        # Detect faces in the image
+        face_locations = face_recognition.face_locations(rgb_frame)
+        
+        if not face_locations:
+            return jsonify({'error': 'No face detected in image'}), 400
+        
+        if len(face_locations) > 1:
+            return jsonify({'error': 'Multiple faces detected. Please upload an image with a single face'}), 400
+        
+        # Save the face
+        face_location = face_locations[0]
+        success = detector.save_face(frame, face_location, name, False)
+        
+        if success:
+            socketio.emit('faces_updated')
+            return jsonify({'message': 'Face added successfully'})
+        else:
+            return jsonify({'error': 'Failed to save face'}), 400
+            
+    except Exception as e:
+        print(f"Error uploading face: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     # Create a templates directory if it doesn't exist

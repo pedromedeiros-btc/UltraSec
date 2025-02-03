@@ -5,8 +5,11 @@ After=network.target
 [Service]
 User=cloudwalkoffice
 WorkingDirectory=/home/cloudwalkoffice/face_detection
-Environment="PATH=/home/cloudwalkoffice/face_detection/face_detection_env/bin:$PATH"
-ExecStart=/home/cloudwalkoffice/face_detection/face_detection_env/bin/python3 web_app.py
+Environment="PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:/home/cloudwalkoffice/face_detection/face_detection_env/bin"
+Environment="DISPLAY=:0"
+Environment="XAUTHORITY=/home/cloudwalkoffice/.Xauthority"
+Environment="QT_QPA_PLATFORM=xcb"
+ExecStart=/bin/bash start_face_recognition.sh
 Restart=always
 RestartSec=10
 

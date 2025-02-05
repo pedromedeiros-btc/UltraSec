@@ -77,6 +77,19 @@ def read_latest_logs():
         print(f"Error reading logs: {str(e)}")
         return []
 
+def read_logs_for_date(date_str):
+    """Read logs for a specific date"""
+    try:
+        log_file = os.path.join(detector.logs_dir, f"detections_{date_str}.txt")
+        if os.path.exists(log_file):
+            with open(log_file, 'r') as f:
+                lines = f.readlines()
+                return [line.strip() for line in lines]
+        return []
+    except Exception as e:
+        print(f"Error reading logs for date {date_str}: {str(e)}")
+        return []
+
 def log_callback(name, timestamp):
     """Callback function for face detection logs"""
     log_message = f"{name} was detected at the office at {timestamp}"
@@ -153,6 +166,33 @@ def get_logs():
         return jsonify({'logs': logs})
     except Exception as e:
         print(f"Error getting logs: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/logs/history', methods=['GET'])
+def get_logs_history():
+    """Get logs from the past few days"""
+    try:
+        days = request.args.get('days', default=7, type=int)  # Default to 7 days
+        if days > 30:  # Limit to prevent too large responses
+            days = 30
+            
+        logs_history = {}
+        current_date = datetime.now()
+        
+        for i in range(days):
+            date = current_date - timedelta(days=i)
+            date_str = date.strftime('%Y%m%d')
+            logs = read_logs_for_date(date_str)
+            if logs:  # Only include dates that have logs
+                logs_history[date.strftime('%Y-%m-%d')] = logs
+                
+        return jsonify({
+            'logs_history': logs_history,
+            'days_requested': days,
+            'days_found': len(logs_history)
+        })
+    except Exception as e:
+        print(f"Error getting logs history: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/faces', methods=['POST'])
@@ -389,6 +429,29 @@ def upload_face():
     except Exception as e:
         print(f"Error uploading face: {str(e)}")
         return jsonify({'error': str(e)}), 500
+
+@app.route('/logs')
+def view_logs():
+    """View logs organized by day"""
+    try:
+        days = request.args.get('days', default=7, type=int)
+        if days > 30:  # Limit to prevent too large responses
+            days = 30
+            
+        logs_history = {}
+        current_date = datetime.now()
+        
+        for i in range(days):
+            date = current_date - timedelta(days=i)
+            date_str = date.strftime('%Y%m%d')
+            logs = read_logs_for_date(date_str)
+            if logs:  # Only include dates that have logs
+                logs_history[date.strftime('%Y-%m-%d')] = logs
+                
+        return render_template('logs.html', logs_history=logs_history, days=days)
+    except Exception as e:
+        print(f"Error getting logs history: {str(e)}")
+        return f"Error loading logs: {str(e)}", 500
 
 if __name__ == '__main__':
     # Create a templates directory if it doesn't exist

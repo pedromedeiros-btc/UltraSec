@@ -358,21 +358,22 @@ class FaceDetector:
                     cv2.putText(display_frame, name, (left + 6, bottom - 6),
                               cv2.FONT_HERSHEY_DUPLEX, 0.6, (255, 255, 255), 1)
                     
-                    # Handle unknown faces in green box using original frame
-                    if is_inside and name == "Unknown":
-                        print("Found unknown face in green box")
-                        self.save_face(original_frame, face_location, None, True)
-                        if hasattr(self, 'socketio'):
-                            self.socketio.emit('faces_updated')
-                            print("Notified web app of new face")
-                    
-                    # Log detections for known faces
-                    elif is_inside and name != "Unknown" and self.should_log_detection(name):
-                        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        if hasattr(self, 'log_callback'):
-                            self.log_callback(name, timestamp)
+                    # Only process faces that are inside the green box
+                    if is_inside:
+                        if name == "Unknown":
+                            print("Found unknown face in green box")
+                            self.save_face(original_frame, face_location, None, True)
+                            if hasattr(self, 'socketio'):
+                                self.socketio.emit('faces_updated')
+                                print("Notified web app of new face")
                         else:
-                            self.log_detection(name, timestamp)
+                            # Only log known faces if they're not going to be registered as unknown
+                            if self.should_log_detection(name):
+                                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                if hasattr(self, 'log_callback'):
+                                    self.log_callback(name, timestamp)
+                                else:
+                                    self.log_detection(name, timestamp)
             
             return True, display_frame
 

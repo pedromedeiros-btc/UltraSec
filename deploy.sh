@@ -11,58 +11,20 @@ echo "Transferring files to Raspberry Pi..."
 scp -P $PI_PORT face_detector.py $PI_USER@$PI_HOST:$PI_PATH/
 scp -P $PI_PORT web_app.py $PI_USER@$PI_HOST:$PI_PATH/
 scp -P $PI_PORT start.sh $PI_USER@$PI_HOST:$PI_PATH/
+scp -P $PI_PORT setup_network.sh $PI_USER@$PI_HOST:$PI_PATH/
+scp -P $PI_PORT monitor_network.sh $PI_USER@$PI_HOST:$PI_PATH/
+scp -P $PI_PORT test_door.py $PI_USER@$PI_HOST:$PI_PATH/
+scp -P $PI_PORT door_proxy.py $PI_USER@$PI_HOST:$PI_PATH/
 scp -P $PI_PORT -r templates $PI_USER@$PI_HOST:$PI_PATH/
 
-echo "Setting up Face Recognition System on Raspberry Pi..."
-echo "=================================================="
-
-# SSH into Pi and run setup commands
+# Make scripts executable and install dependencies
 ssh -p $PI_PORT $PI_USER@$PI_HOST "
-    echo 'Updating system packages...' && \
-    sudo apt update && \
-    sudo apt upgrade -y && \
-    
-    echo 'Installing system dependencies...' && \
-    sudo apt install -y \
-        python3-full \
-        python3-pip \
-        python3-venv \
-        libcamera-tools \
-        cmake \
-        build-essential \
-        libopencv-dev \
-        python3-opencv \
-        git && \
-    
-    echo 'Setting up application directory...' && \
-    mkdir -p $PI_PATH && \
-    
-    echo 'Setting up Python virtual environment...' && \
-    cd $PI_PATH && \
-    python3 -m venv face_detection_env && \
-    source face_detection_env/bin/activate && \
-    
-    echo 'Installing Python packages...' && \
-    pip install --upgrade pip && \
-    pip install \
-        face_recognition \
-        opencv-python \
-        flask \
-        flask-socketio \
-        pillow \
-        numpy \
-        dlib && \
-    
-    echo 'Creating application directories...' && \
-    mkdir -p $PI_PATH/saved_faces && \
-    mkdir -p $PI_PATH/detection_logs && \
-    mkdir -p $PI_PATH/templates && \
-    mkdir -p $PI_PATH/new_registrations && \
-    
-    echo 'Making scripts executable...' && \
-    chmod +x $PI_PATH/start.sh && \
-    
-    echo 'Creating systemd service...' && \
+    chmod +x $PI_PATH/*.sh && \
+    pip3 install flask-socketio eventlet python-engineio==3.14.2 python-socketio==4.6.1
+"
+
+# Update systemd service to use our new startup script
+ssh -p $PI_PORT $PI_USER@$PI_HOST "
     sudo bash -c 'cat > /etc/systemd/system/face-recognition.service << EOL
 [Unit]
 Description=Face Recognition System
@@ -73,21 +35,17 @@ Type=simple
 User=$PI_USER
 WorkingDirectory=$PI_PATH
 Environment=PATH=$PI_PATH/face_detection_env/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-ExecStart=$PI_PATH/face_detection_env/bin/python web_app.py
+ExecStart=$PI_PATH/start.sh
 Restart=always
 RestartSec=3
 
 [Install]
 WantedBy=multi-user.target
-EOL' && \
-    
-    echo 'Enabling and starting service...' && \
-    sudo systemctl daemon-reload && \
-    sudo systemctl enable face-recognition && \
-    sudo systemctl start face-recognition && \
-    
-    echo 'Checking service status...' && \
-    sudo systemctl status face-recognition
+EOL'
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable face-recognition
+    sudo systemctl restart face-recognition
 "
 
 echo "=================================================="

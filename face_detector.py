@@ -12,6 +12,9 @@ import threading
 import subprocess
 from PIL import Image
 import io
+import requests
+from requests.auth import HTTPDigestAuth
+import time
 
 class FaceDetector:
     def __init__(self):
@@ -27,6 +30,10 @@ class FaceDetector:
         self.cap = None  # Changed from camera_process to cap
         self.log_callback = None
         self.last_detection_times = {}  # Track last detection time for each person
+        self.door_controller_url = "http://100.94.146.43:8081/door"  # Pi's IP address
+        self.door_auth = HTTPDigestAuth('admin', '9cby@GmP')
+        self.last_door_action_time = 0
+        self.door_cooldown = 0.5  # 500ms cooldown between door actions
         
         # Create necessary directories
         for directory in [self.saved_faces_dir, self.registration_dir, self.logs_dir]:
@@ -303,6 +310,80 @@ class FaceDetector:
             print(f"Error starting camera: {str(e)}")
             return False
 
+    def control_door(self, action):
+        """Control the door with rate limiting"""
+        try:
+            current_time = time.time()
+            if current_time - self.last_door_action_time < self.door_cooldown:
+                print("Door action too soon, waiting for cooldown")
+                return False
+
+            print(f"Attempting to {action} door...")
+            params = {"action": action, "channel": "1"}
+            
+            # Print full URL and auth details
+            full_url = f"{self.door_controller_url}?action={action}&channel=1"
+            print(f"Sending request to: {full_url}")
+            print(f"Using digest auth with username: {self.door_auth.username}")
+            
+            # Create a session with specific interface binding
+            session = requests.Session()
+            session.mount("http://", requests.adapters.HTTPAdapter(max_retries=1))
+            
+            # Add more timeout options and debugging
+            response = session.get(
+                self.door_controller_url,
+                params=params,
+                auth=self.door_auth,
+                timeout=5,
+                verify=False,  # Skip SSL verification if needed
+                headers={
+                    'Connection': 'close',
+                    'Host': '192.168.68.210'
+                }
+            )
+            
+            self.last_door_action_time = current_time
+            
+            # Print full response details
+            print(f"Door response status code: {response.status_code}")
+            print(f"Door response text: {response.text}")
+            print(f"Door response headers: {dict(response.headers)}")
+            
+            if response.text.strip() == "OK":
+                print(f"Door {action} successful")
+                return True
+            else:
+                print(f"Door {action} failed: {response.text}")
+                return False
+                
+        except requests.exceptions.Timeout:
+            print("Door controller request timed out - check if device is accessible")
+            return False
+        except requests.exceptions.ConnectionError as e:
+            print(f"Failed to connect to door controller: {str(e)}")
+            print("Check network connectivity and routes")
+            return False
+        except Exception as e:
+            print(f"Error controlling door: {str(e)}")
+            print(f"Full error details: {repr(e)}")
+            return False
+
+    def open_door(self):
+        """Open the door"""
+        return self.control_door("openDoor")
+
+    def close_door(self):
+        """Close the door"""
+        return self.control_door("closeDoor")
+
+    def should_open_door(self, name):
+        """Check if the person is authorized to open the door"""
+        # Add debugging
+        is_authorized = not name.startswith("Person_")
+        print(f"Checking authorization for {name}: {'authorized' if is_authorized else 'not authorized'}")
+        return is_authorized
+
     def get_frame_with_detections(self):
         """Get a frame from camera with face detections"""
         if self.cap is None or not self.cap.isOpened():
@@ -367,7 +448,23 @@ class FaceDetector:
                                 self.socketio.emit('faces_updated')
                                 print("Notified web app of new face")
                         else:
-                            # Only log known faces if they're not going to be registered as unknown
+                            # Add more debugging for door control flow
+                            print(f"Known face detected in green box: {name}")
+                            if self.should_open_door(name):
+                                print(f"Attempting to open door for authorized person: {name}")
+                                try:
+                                    if self.open_door():
+                                        print(f"Successfully opened door for {name}")
+                                        print("Starting timer to close door...")
+                                        threading.Timer(5.0, self.close_door).start()
+                                    else:
+                                        print(f"Failed to open door for {name}")
+                                except Exception as e:
+                                    print(f"Error in door control sequence: {str(e)}")
+                            else:
+                                print(f"Person not authorized to open door: {name}")
+                            
+                            # Log the detection as before
                             if self.should_log_detection(name):
                                 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                 if hasattr(self, 'log_callback'):

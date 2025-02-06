@@ -453,6 +453,26 @@ def view_logs():
         print(f"Error getting logs history: {str(e)}")
         return f"Error loading logs: {str(e)}", 500
 
+@app.route('/api/door/<action>', methods=['POST'])
+def control_door(action):
+    """Control door manually (admin only)"""
+    if action not in ['open', 'close']:
+        return jsonify({'error': 'Invalid action'}), 400
+        
+    success = False
+    if action == 'open':
+        success = detector.open_door()
+        if success:
+            # Start timer to close door after 5 seconds
+            threading.Timer(5.0, detector.close_door).start()
+    else:
+        success = detector.close_door()
+        
+    if success:
+        return jsonify({'message': f'Door {action} successful'})
+    else:
+        return jsonify({'error': f'Failed to {action} door'}), 500
+
 if __name__ == '__main__':
     # Create a templates directory if it doesn't exist
     if not os.path.exists('templates'):
